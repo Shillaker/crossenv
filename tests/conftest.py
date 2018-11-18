@@ -1,3 +1,4 @@
+import sys
 import os
 import tarfile
 import shutil
@@ -20,118 +21,163 @@ def pytest_configure(config):
     global _cache_dir
     _cache_dir = os.path.abspath(config.getini('cache_dir'))
 
+class PythonSource:
+    URL = 'https://www.python.org/ftp/python/%s/Python-%s.tar.xz'
 
-class _speak():
-    def __init__(self, capsys):
-        self.capsys = capsys
-        self.first = True
+    """Download and unpack a Python version"""
+    def __init__(self, version):
+        self.version = version
+        self.url = self.URL % (version, version)
+        basename = self.url.rsplit('/',1)[-1]
+        self.tarball = os.path.join(_cache_dir, basename)
+        self.extracted = os.path.join(_cache_dir, 'Python-' + self.version)
+        self.configure = os.path.join(self.extracted, 'configure')
+        self._download()
+        self._extract()
 
-    def __call__(self, *args, **kwargs):
-        with self.capsys.disabled():
-            if self.first:
-                print('\n')
-                self.first = False
-            print(*args, **kwargs)
+    def _download(self):
+        if os.path.isfile(self.tarball):
+            return
 
-    def __enter__(self):
-        self.capsys.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.capsys.__exit__(exc_type, exc_val, exc_tb)
-        
-@pytest.fixture
-def speak(capsys):
-    return _speak(capsys)
-
-@pytest.fixture(params=['3.7.0'])
-def python_source(request, speak):
-    """Download the python source code"""
-    root = 'Python-%s' % request.param
-    dest = os.path.join(_cache_dir, root)
-    tarball = dest + '.tar.xz'
-
-    _download_source(request.param, tarball, speak)
-    _extract_tarball(tarball, dest, speak)
-    return PythonInfo(version=request.param, source=dest)
-
-
-def _extract_tarball(tarball, dest, speak):
-    configure = os.path.join(dest, 'configure')
-
-    if os.path.isfile(configure):
-        return
-
-    with tarfile.open(tarball) as tf:
+        print("Downloading Python %s" % self.version)
+        r = requests.get(self.url, stream=True)
+        r.raise_for_status()
         try:
-            info = tf.getmember('%s/configure' % os.path.basename(dest))
-        except KeyError:
-            raise RuntimeError("Archive does not contain Python source")
-
-        try:
-            speak("Extracting %s..." % os.path.basename(tarball))
-            tf.extractall(os.path.dirname(dest))
+            os.makedirs(os.path.dirname(self.tarball), exist_ok=True)
+            with open(self.tarball, 'wb') as fp:
+                for chunk in r.iter_content(0x10000):
+                    fp.write(chunk)
         except:
             try:
-                shutil.rmtree(dest)
-            except Exception:
+                os.unlink(self.tarball)
+            except OSError:
                 pass
             raise
 
-def _download_source(version, tarball, speak):
-    if os.path.isfile(tarball):
-        return
 
-    url = 'https://www.python.org/ftp/python/%s/Python-%s.tar.xz' % (
-            version, version)
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-    try:
-        os.makedirs(os.path.dirname(tarball), exist_ok=True)
-        with open(tarball, 'wb') as fp:
-            speak("Downloading Python %s..." % version)
-            for chunk in r.iter_content(0x10000):
-                fp.write(chunk)
-    except:
-        try:
-            os.unlink(tarball)
-        except OSError:
-            pass
-        raise
+    def _extract(self):
+        if os.path.isfile(self.configure):
+            return
 
-def _run_command(*args, error=None, **kwargs):
-    try:
-        subprocess.check_call(args, **kwargs)
-    except (subprocess.CalledProcessError, OSError) as e:
-        if error is not None:
-            raise RuntimeError(error) from None
-        raise
+        print("Extracting %s" % os.path.basename(self.tarball))
 
-@pytest.fixture(params=['installed', 'uninstalled'])
-def host_python(request, python_source, speak):
-    working_dir = python_source.source + '-build'
-    install_dir = python_source.source + '-install'
-    working_py = os.path.join(working_dir, 'python')
-    install_py = os.path.join(install_dir, 'bin', 'python3')
-    configure = os.path.join(python_source.source, 'configure')
+        with tarfile.open(self.tarball) as tf:
+            extract_dir = os.path.dirname(self.extracted)
+            try:
+                configure = os.path.relpath(self.configure, extract_dir)
+                info = tf.getmember(configure)
+            except KeyError:
+                raise RuntimeError("Archive does not contain Python source")
 
-    if not os.path.isfile(working_py) or not os.path.isfile(install_py):
-        speak("Building Python %s" % python_source.version)
-        os.makedirs(working_dir, exist_ok=True)
-        _run_command(configure, '--prefix='+install_dir, cwd=working_dir)
-        _run_command('make', cwd=working_dir) # TODO: parallel
-        _run_command('make', 'install', cwd=working_dir)
+            try:
+                tf.extractall(extract_dir)
+            except:
+                try:
+                    shutil.rmtree(self.extracted)
+                except Exception:
+                    pass
+                raise
 
-    if request.param == 'installed':
-        exe = install_py
-    else:
-        exe = working_py
+class MakePython:
+    """A class for building python from source"""
+    def __init__(self, version, tag='build',
+            source=None, working=None, install=None,
+            config_args=None, make_env=None, make_args=None):
+        self.version = version
+        self.tag = tag
 
-    return python_source._replace(build=working_dir, install=install_dir,
-            exe=exe)
+        if source is None:
+            self.source = PythonSource(version)
+        else:
+            self.source = source
 
-@pytest.fixture(scope='session')
-def musl_host():
-    """A musl-based toolchain that otherwise runs on the host. This is the
-    easiest way to test."""
-    pass
+        if working is None:
+            self.working = '-'.join([self.source.extracted, self.tag])
+        else:
+            self.working = working
+        self.makefile = os.path.join(self.working, 'Makefile')
+
+        if install is None:
+            self.install = self.working + '-install'
+        else:
+            self.install = install
+
+        self.config_args = config_args or []
+        self.make_env = make_env or {}
+        self.make_args = make_args or []
+
+        self.working_exe = os.path.join(self.working, 'python')
+        self.install_exe = os.path.join(self.install, 'bin', 'python3')
+        self._build()
+
+    def _build(self):
+        if (os.path.isfile(self.working_exe) and
+                os.path.isfile(self.install_exe)):
+            return
+
+        os.makedirs(self.working, exist_ok=True)
+        cmdline = [ self.source.configure, '--prefix=' + self.install ]
+        cmdline.extend(self.config_args)
+        subprocess.check_call(cmdline, cwd=self.working)
+
+        cmdline = [ 'make' ]
+        cmdline.extend(self.make_args)
+        env = os.environ.copy()
+        env.update(self.make_env)
+        subprocess.check_call(cmdline, cwd=self.working, env=env)
+
+        cmdline = [ 'make', 'install' ]
+        cmdline.extend(self.make_args)
+        env = os.environ.copy()
+        env.update(self.make_env)
+        subprocess.check_call(cmdline, cwd=self.working, env=env)
+
+
+class RunPythonBase:
+    # Need self.version, self.exe
+    def run(self, *args, **kwargs):
+        cmdline = [ self.exe ]
+        cmdline.extend(args)
+        return subprocess.check_output(cmdline, **kwargs)
+
+class RunPython(RunPythonBase):
+    def __init__(self, version, installed=True):
+        self.version = version
+        self.make = MakePython(version)
+        self.source = self.make.source
+        if installed:
+            self.exe = self.make.install_exe
+        else:
+            self.exe = self.make.working_exe
+
+
+class SystemPython(RunPythonBase):
+    def __init__(self):
+        self.exe = sys.executable
+        self.version = sys.version.split()[0]
+
+
+class NativeHostPython(RunPythonBase):
+    """Here the host and build pythons are the same. This is for
+    quick tests of basic functionality."""
+    def __init__(self, build_python):
+        self.version = build_python.version
+        self.exe = build_python.exe
+
+
+@pytest.fixture(params=['system', '3.7.0'])
+def build_python(request, capsys):
+    with capsys.disabled(): # Want 'downloading... notifications'
+        if request.param == 'system':
+            return SystemPython()
+        else:
+            return RunPython(request.param)
+
+
+@pytest.fixture(params=['native'])
+def host_python(request, build_python, capsys):
+    with capsys.disabled():
+        if request.param == 'native':
+            return NativeHostPython(build_python)
+        else:
+            raise NotImplementedError("TODO: %s" % request.param)
