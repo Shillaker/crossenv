@@ -18,8 +18,11 @@ steps:
       displayName: Pull prebuilt binaries
 
     - script: |
-        pytest
+        pytest --junit-xml=test-results.xml
       displayName: Run tests
 
-    - script: |
-        python setup.py sdist bdist_wheel
+    - task: PublishTestResults@2
+      condition: succeedOrFailed()
+      inputs:
+          testResultsFiles: '**/test-*.xml'
+          testRunTitle: 'Publish test results'
