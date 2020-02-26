@@ -6,10 +6,16 @@ steps:
       inputs:
           versionSpec: '>=3.5'
     - script: |
-        sudo apt install qemu-user
+        set -x
+        sudo apt update
+        sudo apt install -y qemu-user git-lfs
         python -m pip install --upgrade pip
         pip install pytest wheel
       displayName: Install dependencies
+
+    - script: |
+        git lfs pull
+      displayName: Pull prebuilt binaries
 
     - script: |
         pytest
