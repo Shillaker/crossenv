@@ -22,7 +22,7 @@ steps:
       displayName: Run tests
 
     - task: PublishTestResults@2
-      condition: succeedOrFailed()
+      condition: succeededOrFailed()
       inputs:
           testResultsFiles: '**/test-*.xml'
           testRunTitle: 'Publish test results'
