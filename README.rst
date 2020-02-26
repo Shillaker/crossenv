@@ -1,7 +1,7 @@
 Virtual Environments for Cross-Compiling Python Extension Modules
 =============================================================================
 
-|build status|
+|build status| |test status|
 
 Porting a Python app to an embedded device can be complicated. Once you have
 Python built for your system, you may find yourself needing to include many
@@ -173,3 +173,4 @@ Known Limitations
   ``build-pip install <whatever>`` prior to ``pip install <whatever>``.
 
 .. |build status| image:: https://dev.azure.com/benfogle/crossenv/_apis/build/status/benfogle.crossenv?branchName=master
+.. |test status| image:: https://img.shields.io/azure-devops/tests/benfogle/crossenv/1/master
