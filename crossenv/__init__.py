@@ -115,7 +115,7 @@ class CrossEnvBuilder(venv.EnvBuilder):
             host_cxx=None,
             host_ar=None,
             host_relativize=False,
-            host_config_vars=(),
+            host_config_vars=dict(),
             host_sysconfigdata_file=None):
         self.host_sysroot = host_sysroot
         self.host_sysconfigdata_file = host_sysconfigdata_file
@@ -392,7 +392,8 @@ class CrossEnvBuilder(venv.EnvBuilder):
             sysname = sys.platform
         elif len(host_info) == 1:
             sysname = host_info[0]
-            machine = platform.machine()
+            # machine = platform.machine()
+            machine = ""  # Don't guess
         else:
             sysname = host_info[0]
             machine = host_info[-1]
